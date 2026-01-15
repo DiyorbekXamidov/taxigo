@@ -25,6 +25,7 @@ const DriverProfile = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [isDriver, setIsDriver] = useState(false);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -60,6 +61,11 @@ const DriverProfile = () => {
     setLoading(true);
     try {
       const metadata = session.user.user_metadata || {};
+      
+      // Check if user is driver - must be explicitly true or user_type === 'driver'
+      const userIsDriver = metadata.is_driver === true || metadata.user_type === 'driver';
+      setIsDriver(userIsDriver);
+      console.log('User metadata:', metadata, 'isDriver:', userIsDriver);
       
       setFormData({
         name: metadata.name || '',
@@ -169,7 +175,7 @@ const DriverProfile = () => {
         description: "Profil ma'lumotlari saqlandi",
       });
 
-      navigate('/driver');
+      navigate(isDriver ? '/driver' : '/passenger');
     } catch (error: any) {
       toast({
         title: "Xatolik",
@@ -209,7 +215,7 @@ const DriverProfile = () => {
       <main className="flex-1 container mx-auto px-4 py-6">
         <Button
           variant="ghost"
-          onClick={() => navigate('/driver')}
+          onClick={() => navigate(isDriver ? '/driver' : '/passenger')}
           className="mb-4"
         >
           <ArrowLeft className="w-4 h-4 mr-2" />
@@ -301,57 +307,59 @@ const DriverProfile = () => {
                 </div>
               </div>
 
-              {/* Vehicle Info Section */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold flex items-center gap-2">
-                  <Car className="w-5 h-5" />
-                  {language === 'uz-latin' ? "Mashina ma'lumotlari" : "Машина маълумотлари"}
-                </h3>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('driver.vehicleModel')}</Label>
-                    <Select 
-                      value={formData.default_vehicle_model} 
-                      onValueChange={(v) => setFormData({...formData, default_vehicle_model: v})}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('common.select')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {vehicleModels.map((m) => (
-                          <SelectItem key={m} value={m}>{m}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+              {/* Vehicle Info Section - Only for Drivers */}
+              {isDriver && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Car className="w-5 h-5" />
+                    {language === 'uz-latin' ? "Mashina ma'lumotlari" : "Машина маълумотлари"}
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>{t('driver.vehicleModel')}</Label>
+                      <Select 
+                        value={formData.default_vehicle_model} 
+                        onValueChange={(v) => setFormData({...formData, default_vehicle_model: v})}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('common.select')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {vehicleModels.map((m) => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>{t('driver.vehicleColor')}</Label>
+                      <Select 
+                        value={formData.default_vehicle_color} 
+                        onValueChange={(v) => setFormData({...formData, default_vehicle_color: v})}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('common.select')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(vehicleColors).map(([key, val]) => (
+                            <SelectItem key={key} value={key}>{val[language]}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>{t('driver.vehicleColor')}</Label>
-                    <Select 
-                      value={formData.default_vehicle_color} 
-                      onValueChange={(v) => setFormData({...formData, default_vehicle_color: v})}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('common.select')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(vehicleColors).map(([key, val]) => (
-                          <SelectItem key={key} value={key}>{val[language]}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
 
-                <div className="space-y-2">
-                  <Label>{t('driver.plateNumber')}</Label>
-                  <Input
-                    value={formData.default_plate_number}
-                    onChange={(e) => setFormData({...formData, default_plate_number: e.target.value})}
-                    placeholder="01 A 123 AA"
-                  />
+                  <div className="space-y-2">
+                    <Label>{t('driver.plateNumber')}</Label>
+                    <Input
+                      value={formData.default_plate_number}
+                      onChange={(e) => setFormData({...formData, default_plate_number: e.target.value})}
+                      placeholder="01 A 123 AA"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Submit Button */}
               <Button

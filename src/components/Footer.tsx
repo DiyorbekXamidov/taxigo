@@ -73,25 +73,25 @@ const Footer = () => {
             <h3 className="font-semibold mb-4 text-secondary-foreground">{t('footer.contact')}</h3>
             <div className="flex flex-col gap-3">
               <a 
-                href="tel:+998901234567" 
+                href="tel:+998902665004" 
                 className="flex items-center gap-3 text-muted-foreground hover:text-primary transition-colors text-sm group"
               >
                 <div className="w-8 h-8 rounded-lg bg-secondary-foreground/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
                   <PhoneIcon className="w-4 h-4" />
                 </div>
-                +998 90 123 45 67
+                +998 90 266 50 04
               </a>
               <a 
-                href="mailto:info@taxigo.uz" 
+                href="mailto:xamidovdiyorbek220@gmail.com" 
                 className="flex items-center gap-3 text-muted-foreground hover:text-primary transition-colors text-sm group"
               >
                 <div className="w-8 h-8 rounded-lg bg-secondary-foreground/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
                   <Mail className="w-4 h-4" />
                 </div>
-                info@taxigo.uz
+                xamidovdiyorbek220@gmail.com
               </a>
               <a 
-                href="https://t.me/taxigo_bot" 
+                href="https://t.me/xamidov_diyorbek" 
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 text-muted-foreground hover:text-primary transition-colors text-sm group"
@@ -99,7 +99,7 @@ const Footer = () => {
                 <div className="w-8 h-8 rounded-lg bg-secondary-foreground/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
                   <Send className="w-4 h-4" />
                 </div>
-                @taxigo_bot
+                @xamidov_diyorbek
               </a>
             </div>
           </div>
@@ -110,7 +110,7 @@ const Footer = () => {
       <div className="border-t border-muted/20">
         <div className="container mx-auto px-4 py-5">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
-            <p>© 2024 TaxiGo. {t('footer.rights')}.</p>
+            <p>© 2026 TaxiGo. {t('footer.rights')}.</p>
             <p className="text-xs">
               {isLatin 
                 ? "Surxondaryo viloyati, O'zbekiston" 

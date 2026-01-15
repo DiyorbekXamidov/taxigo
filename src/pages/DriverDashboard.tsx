@@ -14,7 +14,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { surxondaryoRegion, vehicleModels, vehicleColors } from '@/data/regions';
+import { useMobileKeyboardScroll } from '@/hooks/useMobileKeyboardScroll';
+import { surxondaryoRegion, regionalCenters, vehicleModels, vehicleColors } from '@/data/regions';
 import { Plus, Edit2, Trash2, Pause, Play, Car, ArrowRight, Clock, Users, Settings, CalendarCheck } from 'lucide-react';
 import { Session } from '@supabase/supabase-js';
 
@@ -42,6 +43,7 @@ const DriverDashboard = () => {
   const { language, t } = useLanguage();
   const navigate = useNavigate();
   const { toast } = useToast();
+  useMobileKeyboardScroll(); // Auto-scroll inputs into view on mobile
   const [session, setSession] = useState<Session | null>(null);
   const [trips, setTrips] = useState<TaxiTrip[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,8 +76,20 @@ const DriverDashboard = () => {
         navigate('/auth');
       } else {
         setSession(session);
-        setDriverName(session.user.user_metadata?.name || '');
-        setDriverPhone(session.user.user_metadata?.phone || '');
+        const metadata = session.user.user_metadata || {};
+        setDriverName(metadata.name || '');
+        setDriverPhone(metadata.phone || '');
+        
+        // Auto-fill vehicle info from profile settings
+        if (metadata.default_vehicle_model || metadata.default_vehicle_color || metadata.default_plate_number) {
+          setFormData(prev => ({
+            ...prev,
+            vehicle_model: metadata.default_vehicle_model || prev.vehicle_model,
+            vehicle_color: metadata.default_vehicle_color || prev.vehicle_color,
+            plate_number: metadata.default_plate_number || prev.plate_number,
+          }));
+        }
+        
         fetchTrips(session.user.id);
       }
     });
@@ -125,12 +139,67 @@ const DriverDashboard = () => {
       };
 
       if (editingTrip) {
+        // Track what changed for notification
+        const changes: { field: string; old_value: string; new_value: string }[] = [];
+        if (editingTrip.departure_time !== formData.departure_time) {
+          changes.push({ field: 'departure_time', old_value: editingTrip.departure_time, new_value: formData.departure_time });
+        }
+        if (editingTrip.departure_date !== formData.departure_date) {
+          changes.push({ field: 'departure_date', old_value: editingTrip.departure_date, new_value: formData.departure_date });
+        }
+        if (editingTrip.from_district !== formData.from_district) {
+          changes.push({ field: 'from_district', old_value: editingTrip.from_district, new_value: formData.from_district });
+        }
+        if (editingTrip.to_district !== formData.to_district) {
+          changes.push({ field: 'to_district', old_value: editingTrip.to_district, new_value: formData.to_district });
+        }
+        if (editingTrip.price_per_seat !== formData.price_per_seat) {
+          changes.push({ field: 'price_per_seat', old_value: String(editingTrip.price_per_seat), new_value: String(formData.price_per_seat) });
+        }
+
         const { error } = await supabase
           .from('taxi_trips')
           .update(tripData)
           .eq('id', editingTrip.id);
 
         if (error) throw error;
+
+        // Notify booked passengers about changes
+        if (changes.length > 0) {
+          try {
+            // Get bookings for this trip
+            const { data: bookings } = await supabase
+              .from('bookings')
+              .select('passenger_name, passenger_telegram_chat_id')
+              .eq('trip_id', editingTrip.id)
+              .eq('status', 'confirmed');
+
+            if (bookings && bookings.length > 0) {
+              const passengers = bookings.map(b => ({
+                name: b.passenger_name,
+                telegram_chat_id: b.passenger_telegram_chat_id
+              }));
+
+              await supabase.functions.invoke('notify-passengers', {
+                body: {
+                  action: 'trip_updated',
+                  trip: {
+                    from_district: formData.from_district,
+                    to_district: formData.to_district,
+                    departure_date: formData.departure_date,
+                    departure_time: formData.departure_time,
+                    driver_name: driverName
+                  },
+                  passengers,
+                  changes
+                }
+              });
+            }
+          } catch (notifyError) {
+            console.error('Failed to notify passengers:', notifyError);
+          }
+        }
+
         toast({
           title: t('common.success'),
           description: t('home.title') === 'Ishonchli taksi xizmati' 
@@ -249,8 +318,15 @@ const DriverDashboard = () => {
   };
 
   const getDistrictName = (districtId: string) => {
-    const district = surxondaryoRegion.districts.find(d => d.id === districtId);
-    return district ? district.name[language] : districtId;
+    // Handle multiple districts separated by comma
+    const ids = districtId.split(',').filter(Boolean);
+    const names = ids.map(id => {
+      const district = surxondaryoRegion.districts.find(d => d.id === id);
+      if (district) return district.name[language].toUpperCase();
+      const center = regionalCenters.find(r => r.id === id);
+      return center ? center.name[language].toUpperCase() : id.toUpperCase();
+    });
+    return names.join(', ');
   };
 
   const formatPrice = (price: number) => {
@@ -334,31 +410,147 @@ const DriverDashboard = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('home.from')}</Label>
-                    <Select value={formData.from_district} onValueChange={(v) => setFormData({...formData, from_district: v})}>
+                    <Select value={formData.from_district.split(',')[0] || ''} onValueChange={(v) => {
+                      // Clear to_district if it's the same as the new from_district
+                      if (formData.to_district.split(',').includes(v)) {
+                        setFormData({...formData, from_district: v, to_district: ''});
+                      } else {
+                        setFormData({...formData, from_district: v});
+                      }
+                    }}>
                       <SelectTrigger>
                         <SelectValue placeholder={t('common.select')} />
                       </SelectTrigger>
                       <SelectContent>
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">SURXONDARYO TUMANLARI</div>
                         {surxondaryoRegion.districts.map((d) => (
-                          <SelectItem key={d.id} value={d.id}>{d.name[language]}</SelectItem>
+                          <SelectItem key={d.id} value={d.id}>{d.name[language].toUpperCase()}</SelectItem>
+                        ))}
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-t mt-1 pt-1">VILOYAT MARKAZLARI</div>
+                        {regionalCenters.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>{r.name[language].toUpperCase()}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
                     <Label>{t('home.to')}</Label>
-                    <Select value={formData.to_district} onValueChange={(v) => setFormData({...formData, to_district: v})}>
+                    <Select value={formData.to_district.split(',')[0] || ''} onValueChange={(v) => {
+                      if (formData.from_district.split(',').includes(v)) {
+                        return;
+                      }
+                      setFormData({...formData, to_district: v});
+                    }}>
                       <SelectTrigger>
                         <SelectValue placeholder={t('common.select')} />
                       </SelectTrigger>
                       <SelectContent>
-                        {surxondaryoRegion.districts.map((d) => (
-                          <SelectItem key={d.id} value={d.id}>{d.name[language]}</SelectItem>
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">SURXONDARYO TUMANLARI</div>
+                        {surxondaryoRegion.districts.filter(d => !formData.from_district.split(',').includes(d.id)).map((d) => (
+                          <SelectItem key={d.id} value={d.id}>{d.name[language].toUpperCase()}</SelectItem>
+                        ))}
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-t mt-1 pt-1">VILOYAT MARKAZLARI</div>
+                        {regionalCenters.filter(r => !formData.from_district.split(',').includes(r.id)).map((r) => (
+                          <SelectItem key={r.id} value={r.id}>{r.name[language].toUpperCase()}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
+
+                {/* Additional Pickup Points - shown when destination is a regional center (going FROM districts TO city) */}
+                {regionalCenters.some(r => r.id === formData.to_district) && formData.from_district && !regionalCenters.some(r => r.id === formData.from_district.split(',')[0]) && (
+                  <div className="space-y-2 p-3 bg-muted/50 rounded-lg">
+                    <Label className="text-sm font-medium">
+                      {language === 'uz-latin' ? "QO'SHIMCHA YO'LOVCHI OLISH NUQTALARI" : "ҚЎШИМЧА ЙЎЛОВЧИ ОЛИШ НУҚТАЛАРИ"}
+                    </Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      {language === 'uz-latin' 
+                        ? "Yo'lda qaysi tumanlardan ham yo'lovchi olasiz?" 
+                        : "Йўлда қайси туманлардан ҳам йўловчи оласиз?"}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {surxondaryoRegion.districts
+                        .filter(d => d.id !== formData.from_district.split(',')[0])
+                        .map((d) => {
+                          const isSelected = formData.from_district.split(',').includes(d.id);
+                          return (
+                            <div key={d.id} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`pickup-${d.id}`}
+                                checked={isSelected}
+                                onCheckedChange={(checked) => {
+                                  const currentPickups = formData.from_district.split(',').filter(Boolean);
+                                  const mainPickup = currentPickups[0];
+                                  if (checked) {
+                                    setFormData({
+                                      ...formData, 
+                                      from_district: [mainPickup, ...currentPickups.slice(1), d.id].join(',')
+                                    });
+                                  } else {
+                                    setFormData({
+                                      ...formData, 
+                                      from_district: currentPickups.filter(id => id !== d.id).join(',')
+                                    });
+                                  }
+                                }}
+                              />
+                              <Label htmlFor={`pickup-${d.id}`} className="text-sm font-normal cursor-pointer">
+                                {d.name[language].toUpperCase()}
+                              </Label>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Additional Dropoff Points - shown when starting FROM a regional center (going FROM city TO districts) */}
+                {regionalCenters.some(r => r.id === formData.from_district.split(',')[0]) && formData.to_district && !regionalCenters.some(r => r.id === formData.to_district) && (
+                  <div className="space-y-2 p-3 bg-primary/10 rounded-lg">
+                    <Label className="text-sm font-medium">
+                      {language === 'uz-latin' ? "QO'SHIMCHA TUSHIRISH NUQTALARI" : "ҚЎШИМЧА ТУШИРИШ НУҚТАЛАРИ"}
+                    </Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      {language === 'uz-latin' 
+                        ? "Yo'lda qaysi tumanlarga ham yo'lovchi olib borasiz?" 
+                        : "Йўлда қайси туманларга ҳам йўловчи олиб борасиз?"}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {surxondaryoRegion.districts
+                        .filter(d => d.id !== formData.to_district.split(',')[0])
+                        .map((d) => {
+                          const isSelected = formData.to_district.split(',').includes(d.id);
+                          return (
+                            <div key={d.id} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`dropoff-${d.id}`}
+                                checked={isSelected}
+                                onCheckedChange={(checked) => {
+                                  const currentDropoffs = formData.to_district.split(',').filter(Boolean);
+                                  const mainDropoff = currentDropoffs[0];
+                                  if (checked) {
+                                    setFormData({
+                                      ...formData, 
+                                      to_district: [mainDropoff, ...currentDropoffs.slice(1), d.id].join(',')
+                                    });
+                                  } else {
+                                    setFormData({
+                                      ...formData, 
+                                      to_district: currentDropoffs.filter(id => id !== d.id).join(',')
+                                    });
+                                  }
+                                }}
+                              />
+                              <Label htmlFor={`dropoff-${d.id}`} className="text-sm font-normal cursor-pointer">
+                                {d.name[language].toUpperCase()}
+                              </Label>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Time and Date */}
                 <div className="grid grid-cols-2 gap-4">
@@ -413,9 +605,15 @@ const DriverDashboard = () => {
                   <div className="space-y-2">
                     <Label>{t('driver.pricePerSeat')}</Label>
                     <Input
-                      type="number"
-                      value={formData.price_per_seat}
-                      onChange={(e) => setFormData({...formData, price_per_seat: parseInt(e.target.value)})}
+                      type="text"
+                      inputMode="numeric"
+                      value={formData.price_per_seat.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/\s/g, '');
+                        const numValue = parseInt(value) || 0;
+                        setFormData({...formData, price_per_seat: numValue});
+                      }}
+                      placeholder="50 000"
                       required
                     />
                   </div>

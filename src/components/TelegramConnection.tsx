@@ -10,9 +10,10 @@ import { useToast } from '@/hooks/use-toast';
 
 interface TelegramConnectionProps {
   userId: string;
+  isPassenger?: boolean;
 }
 
-const TelegramConnection = ({ userId }: TelegramConnectionProps) => {
+const TelegramConnection = ({ userId, isPassenger = false }: TelegramConnectionProps) => {
   const { language } = useLanguage();
   const { toast } = useToast();
   const [chatId, setChatId] = useState('');
@@ -26,6 +27,9 @@ const TelegramConnection = ({ userId }: TelegramConnectionProps) => {
     description: language === 'uz-latin' 
       ? "Yo'lovchilar band qilganda Telegram orqali xabar oling" 
       : "Йўловчилар банд қилганда Телеграм орқали хабар олинг",
+    descriptionPassenger: language === 'uz-latin'
+      ? "Haydovchi sayohatni tahrirlasa, Telegram orqali xabar oling"
+      : "Ҳайдовчи саёҳатни таҳрирласа, Телеграм орқали хабар олинг",
     connected: language === 'uz-latin' ? 'Ulangan' : 'Уланган',
     notConnected: language === 'uz-latin' ? 'Ulanmagan' : 'Уланмаган',
     chatIdLabel: language === 'uz-latin' ? 'Telegram Chat ID' : 'Телеграм Chat ID',
@@ -190,7 +194,9 @@ const TelegramConnection = ({ userId }: TelegramConnectionProps) => {
             )}
           </Badge>
         </div>
-        <CardDescription>{texts.description}</CardDescription>
+        <CardDescription>
+          {isPassenger ? texts.descriptionPassenger : texts.description}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {isConnected ? (

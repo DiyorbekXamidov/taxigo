@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,6 +56,23 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
   const [createdBookingId, setCreatedBookingId] = useState<string | null>(null);
   const [savedName, setSavedName] = useState('');
 
+  // Auto-fill from user session
+  useEffect(() => {
+    if (isOpen) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          const metadata = session.user.user_metadata || {};
+          if (metadata.name && !name) {
+            setName(metadata.name);
+          }
+          if (metadata.phone && !phone) {
+            setPhone(metadata.phone);
+          }
+        }
+      });
+    }
+  }, [isOpen]);
+
   const availableSeats = trip.total_seats - trip.occupied_seats;
 
   const texts = {
@@ -88,8 +105,13 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
   };
 
   const getDistrictName = (districtId: string) => {
-    const district = surxondaryoRegion.districts.find(d => d.id === districtId);
-    return district ? district.name[language] : districtId;
+    // Handle multiple districts separated by comma
+    const ids = districtId.split(',').filter(Boolean);
+    const names = ids.map(id => {
+      const district = surxondaryoRegion.districts.find(d => d.id === id);
+      return district ? district.name[language].toUpperCase() : id.toUpperCase();
+    });
+    return names.join(', ');
   };
 
   const formatPrice = (price: number) => {
@@ -187,7 +209,7 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[95vw] max-w-lg mx-auto max-h-[90vh] overflow-y-auto p-4 sm:p-6">
         {!bookingSuccess ? (
           <>
             <DialogHeader>

@@ -74,8 +74,13 @@ const TaxiDetail = () => {
   };
 
   const getDistrictName = (districtId: string) => {
-    const district = surxondaryoRegion.districts.find(d => d.id === districtId);
-    return district ? district.name[language] : districtId;
+    // Handle multiple districts separated by comma
+    const ids = districtId.split(',').filter(Boolean);
+    const names = ids.map(id => {
+      const district = surxondaryoRegion.districts.find(d => d.id === id);
+      return district ? district.name[language].toUpperCase() : id.toUpperCase();
+    });
+    return names.join(', ');
   };
 
   const getColorName = (colorKey: string) => {

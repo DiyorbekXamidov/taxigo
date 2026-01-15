@@ -101,14 +101,71 @@ const Search = () => {
     }
   };
 
+  // Helper to check if trip is expired - using Uzbekistan timezone (UTC+5)
+  const isTripExpired = (trip: TaxiTrip) => {
+    try {
+      // Get current time in Uzbekistan (UTC+5)
+      const now = new Date();
+      const uzbekistanOffset = 5 * 60; // UTC+5 in minutes
+      const localOffset = now.getTimezoneOffset();
+      const uzbekistanTime = new Date(now.getTime() + (uzbekistanOffset + localOffset) * 60000);
+      
+      const [hours, minutes] = trip.departure_time.split(':').map(Number);
+      
+      // Parse date - handle both YYYY-MM-DD and DD.MM.YYYY formats
+      let day, month, year;
+      if (trip.departure_date.includes('-')) {
+        [year, month, day] = trip.departure_date.split('-').map(Number);
+      } else {
+        [day, month, year] = trip.departure_date.split('.').map(Number);
+      }
+      
+      const tripDate = new Date(year, month - 1, day, hours, minutes);
+      
+      return uzbekistanTime > tripDate;
+    } catch {
+      return false;
+    }
+  };
+
   const filteredTrips = trips.filter((trip) => {
     if (filters.availableOnly && trip.total_seats - trip.occupied_seats === 0) return false;
     if (filters.airConditioner && !trip.has_air_conditioner) return false;
     if (filters.forWomen && !trip.for_women) return false;
     return true;
   }).sort((a, b) => {
+    // Expired trips go to the end
+    const aExpired = isTripExpired(a);
+    const bExpired = isTripExpired(b);
+    if (aExpired && !bExpired) return 1;
+    if (!aExpired && bExpired) return -1;
+    
+    // Then apply user filters
     if (filters.cheapest) return a.price_per_seat - b.price_per_seat;
-    if (filters.earliest) return a.departure_time.localeCompare(b.departure_time);
+    if (filters.earliest) {
+      // Compare by date first, then by time - handle both YYYY-MM-DD and DD.MM.YYYY formats
+      const parseDate = (dateStr: string) => {
+        if (dateStr.includes('-')) {
+          // YYYY-MM-DD format
+          const [year, month, day] = dateStr.split('-').map(Number);
+          return { day, month, year };
+        } else {
+          // DD.MM.YYYY format
+          const [day, month, year] = dateStr.split('.').map(Number);
+          return { day, month, year };
+        }
+      };
+      
+      const aDateParts = parseDate(a.departure_date);
+      const bDateParts = parseDate(b.departure_date);
+      const [aHours, aMinutes] = a.departure_time.split(':').map(Number);
+      const [bHours, bMinutes] = b.departure_time.split(':').map(Number);
+      
+      const aDate = new Date(aDateParts.year, aDateParts.month - 1, aDateParts.day, aHours, aMinutes);
+      const bDate = new Date(bDateParts.year, bDateParts.month - 1, bDateParts.day, bHours, bMinutes);
+      
+      return aDate.getTime() - bDate.getTime();
+    }
     return 0;
   });
 

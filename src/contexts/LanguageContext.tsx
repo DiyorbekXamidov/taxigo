@@ -18,6 +18,7 @@ export const translations: Translations = {
   'nav.register': { 'uz-latin': "Ro'yxatdan o'tish", 'uz-cyrillic': "Рўйхатдан ўтиш" },
   'nav.logout': { 'uz-latin': "Chiqish", 'uz-cyrillic': "Чиқиш" },
   'nav.dashboard': { 'uz-latin': "Boshqaruv paneli", 'uz-cyrillic': "Бошқарув панели" },
+  'nav.profile': { 'uz-latin': "Profil", 'uz-cyrillic': "Профил" },
 
   // Homepage
   'home.title': { 'uz-latin': "Ishonchli taksi xizmati", 'uz-cyrillic': "Ишончли такси хизмати" },
@@ -108,6 +109,7 @@ export const translations: Translations = {
   'common.close': { 'uz-latin': "Yopish", 'uz-cyrillic': "Ёпиш" },
   'common.sum': { 'uz-latin': "so'm", 'uz-cyrillic': "сўм" },
   'common.select': { 'uz-latin': "Tanlang", 'uz-cyrillic': "Танланг" },
+  'common.back': { 'uz-latin': "Orqaga", 'uz-cyrillic': "Орқага" },
 
   // Footer
   'footer.rights': { 'uz-latin': "Barcha huquqlar himoyalangan", 'uz-cyrillic': "Барча ҳуқуқлар ҳимояланган" },

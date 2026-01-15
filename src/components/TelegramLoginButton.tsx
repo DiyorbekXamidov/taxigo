@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -16,17 +16,38 @@ interface TelegramLoginButtonProps {
   onSuccess?: () => void;
 }
 
+declare global {
+  interface Window {
+    TelegramLoginWidget?: {
+      dataOnauth: (user: TelegramUser) => void;
+    };
+    onTelegramAuth?: (user: TelegramUser) => void;
+  }
+}
+
+interface TelegramUser {
+  id: number;
+  first_name: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  auth_date: number;
+  hash: string;
+}
+
 const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
-  const [botUsername, setBotUsername] = useState<string | null>(null);
+  const [botUsername, setBotUsername] = useState<string | null>('taxigosurxonbot');
   const [loading, setLoading] = useState(false);
+  const [widgetLoaded, setWidgetLoaded] = useState(false);
+  const widgetRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  // Fetch bot info from Supabase function
   useEffect(() => {
-    // Get bot username
     const fetchBotInfo = async () => {
       try {
-        const { data, error } = await supabase.functions.invoke('telegram-auth', {
+        const { data } = await supabase.functions.invoke('telegram-auth', {
           body: { action: 'get_bot_info' }
         });
 
@@ -35,80 +56,119 @@ const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
         }
       } catch (error) {
         console.error('Error fetching bot info:', error);
+        // Use default bot username
+        setBotUsername('taxigosurxonbot');
       }
     };
 
     fetchBotInfo();
   }, []);
 
-  useEffect(() => {
-    // Handle Telegram login callback
-    const handleTelegramCallback = async () => {
-      const params = new URLSearchParams(window.location.search);
-      
-      // Check if this is a telegram login callback
-      if (!params.get('id') || !params.get('hash')) return;
+  // Handle Telegram auth callback
+  const handleTelegramAuth = useCallback(async (user: TelegramUser) => {
+    setLoading(true);
+    console.log('Telegram auth data:', user);
 
-      setLoading(true);
-
-      const authData = {
-        id: parseInt(params.get('id') || '0'),
-        first_name: params.get('first_name') || '',
-        last_name: params.get('last_name') || undefined,
-        username: params.get('username') || undefined,
-        photo_url: params.get('photo_url') || undefined,
-        auth_date: parseInt(params.get('auth_date') || '0'),
-        hash: params.get('hash') || '',
-      };
-
-      try {
-        const { data, error } = await supabase.functions.invoke('telegram-auth', {
-          body: { 
-            action: 'verify_telegram_auth',
-            ...authData
-          }
-        });
-
-        if (error || !data?.success) {
-          throw new Error(data?.error || 'Authentication failed');
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-auth', {
+        body: { 
+          action: 'verify_telegram_auth',
+          ...user
         }
+      });
 
-        // Set the session
-        if (data.session) {
-          await supabase.auth.setSession({
-            access_token: data.session.access_token,
-            refresh_token: data.session.refresh_token,
-          });
-
-          toast({
-            title: "Muvaffaqiyatli!",
-            description: data.isNewUser 
-              ? "Ro'yxatdan muvaffaqiyatli o'tdingiz"
-              : "Tizimga muvaffaqiyatli kirdingiz",
-          });
-
-          // Clear URL params and navigate
-          window.history.replaceState({}, '', '/auth');
-          navigate('/driver');
-          onSuccess?.();
-        }
-      } catch (error: any) {
-        console.error('Telegram auth error:', error);
-        toast({
-          title: "Xatolik",
-          description: error.message || "Telegram orqali kirish amalga oshmadi",
-          variant: 'destructive',
-        });
-        window.history.replaceState({}, '', '/auth');
-      } finally {
-        setLoading(false);
+      if (error || !data?.success) {
+        throw new Error(data?.error || 'Authentication failed');
       }
-    };
 
-    handleTelegramCallback();
+      // Set the session
+      if (data.session) {
+        await supabase.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
+
+        toast({
+          title: "Muvaffaqiyatli!",
+          description: data.isNewUser 
+            ? "Ro'yxatdan muvaffaqiyatli o'tdingiz"
+            : "Tizimga muvaffaqiyatli kirdingiz",
+        });
+
+        navigate('/driver');
+        onSuccess?.();
+      }
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Telegram orqali kirish amalga oshmadi';
+      console.error('Telegram auth error:', error);
+      toast({
+        title: "Xatolik",
+        description: errorMessage,
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
   }, [navigate, toast, onSuccess]);
 
-  const handleTelegramLogin = () => {
+  // Handle URL callback (when returning from Telegram)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    
+    // Check if this is a telegram login callback
+    if (!params.get('id') || !params.get('hash')) return;
+
+    const authData: TelegramUser = {
+      id: parseInt(params.get('id') || '0'),
+      first_name: params.get('first_name') || '',
+      last_name: params.get('last_name') || undefined,
+      username: params.get('username') || undefined,
+      photo_url: params.get('photo_url') || undefined,
+      auth_date: parseInt(params.get('auth_date') || '0'),
+      hash: params.get('hash') || '',
+    };
+
+    // Clear URL params
+    window.history.replaceState({}, '', '/auth');
+    
+    handleTelegramAuth(authData);
+  }, [handleTelegramAuth]);
+
+  // Load Telegram Login Widget script
+  useEffect(() => {
+    if (!botUsername || widgetLoaded) return;
+
+    // Create global callback function
+    window.onTelegramAuth = handleTelegramAuth;
+
+    // Create script
+    const script = document.createElement('script');
+    script.src = 'https://telegram.org/js/telegram-widget.js?22';
+    script.async = true;
+    script.setAttribute('data-telegram-login', botUsername);
+    script.setAttribute('data-size', 'large');
+    script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+    script.setAttribute('data-request-access', 'write');
+    script.setAttribute('data-radius', '8');
+
+    script.onload = () => setWidgetLoaded(true);
+    script.onerror = () => {
+      console.error('Failed to load Telegram widget');
+      setWidgetLoaded(false);
+    };
+
+    if (widgetRef.current) {
+      widgetRef.current.innerHTML = '';
+      widgetRef.current.appendChild(script);
+    }
+
+    return () => {
+      delete window.onTelegramAuth;
+    };
+  }, [botUsername, widgetLoaded, handleTelegramAuth]);
+
+  // Alternative: Open Telegram bot directly
+  const handleOpenBot = () => {
     if (!botUsername) {
       toast({
         title: "Xatolik",
@@ -118,16 +178,7 @@ const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
       return;
     }
 
-    // Open Telegram login widget in a popup
-    const width = 550;
-    const height = 470;
-    const left = (window.innerWidth - width) / 2;
-    const top = (window.innerHeight - height) / 2;
-    
-    const authUrl = `https://oauth.telegram.org/auth?bot_id=${botUsername}&origin=${encodeURIComponent(window.location.origin)}&embed=1&request_access=write&return_to=${encodeURIComponent(window.location.href)}`;
-    
-    // For Telegram Login Widget, we need to use the widget approach
-    // Redirect to Telegram for auth
+    // Open Telegram with the bot
     const redirectUrl = `https://t.me/${botUsername}?start=login`;
     window.open(redirectUrl, '_blank');
   };
@@ -142,16 +193,24 @@ const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
   }
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      className="w-full flex items-center justify-center gap-2 border-[#0088cc] text-[#0088cc] hover:bg-[#0088cc]/10"
-      onClick={handleTelegramLogin}
-      disabled={!botUsername}
-    >
-      <TelegramIcon />
-      Telegram orqali kirish
-    </Button>
+    <div className="space-y-3">
+      {/* Telegram Login Widget container */}
+      <div ref={widgetRef} className="flex justify-center" />
+      
+      {/* Fallback button if widget doesn't load */}
+      {!widgetLoaded && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full flex items-center justify-center gap-2 border-[#0088cc] text-[#0088cc] hover:bg-[#0088cc]/10"
+          onClick={handleOpenBot}
+          disabled={!botUsername}
+        >
+          <TelegramIcon />
+          Telegram orqali kirish
+        </Button>
+      )}
+    </div>
   );
 };
 

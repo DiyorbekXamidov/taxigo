@@ -11,6 +11,7 @@ import Auth from "./pages/Auth";
 import DriverDashboard from "./pages/DriverDashboard";
 import DriverProfile from "./pages/DriverProfile";
 import DriverBookings from "./pages/DriverBookings";
+import PassengerDashboard from "./pages/PassengerDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,6 +31,8 @@ const App = () => (
             <Route path="/driver" element={<DriverDashboard />} />
             <Route path="/driver/profile" element={<DriverProfile />} />
             <Route path="/driver/bookings" element={<DriverBookings />} />
+            <Route path="/passenger" element={<PassengerDashboard />} />
+            <Route path="/profile" element={<DriverProfile />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
@@ -39,3 +42,4 @@ const App = () => (
 );
 
 export default App;
+

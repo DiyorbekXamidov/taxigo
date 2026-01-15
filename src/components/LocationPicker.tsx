@@ -74,6 +74,12 @@ const LocationPicker = ({
   const leafletMapRef = useRef<any>(null);
   const pickupMarkerRef = useRef<any>(null);
   const dropoffMarkerRef = useRef<any>(null);
+  const modeRef = useRef<'pickup' | 'dropoff'>(mode);
+
+  // Keep modeRef in sync with mode prop
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // Default center (Surxondaryo region)
   const defaultCenter: [number, number] = [37.9344, 67.5669];
@@ -160,7 +166,8 @@ const LocationPicker = ({
           
           const location: LocationData = { lat, lng, address };
           
-          if (mode === 'pickup') {
+          // Use modeRef.current to get the latest mode value
+          if (modeRef.current === 'pickup') {
             // Remove existing pickup marker
             if (pickupMarkerRef.current) {
               map.removeLayer(pickupMarkerRef.current);
@@ -251,10 +258,17 @@ const LocationPicker = ({
   };
 
   const handleSelectSearchResult = async (result: { lat: number; lng: number; display_name: string }) => {
+    // Clear results dropdown but keep selected address in search field
+    setSearchResults([]);
+    setSearchQuery(result.display_name); // Keep the selected address visible
+    
     const L = (await import('leaflet')).default;
+    const lat = typeof result.lat === 'string' ? parseFloat(result.lat) : result.lat;
+    const lng = typeof result.lng === 'string' ? parseFloat(result.lng) : result.lng;
+    
     const location: LocationData = {
-      lat: parseFloat(result.lat.toString()),
-      lng: parseFloat(result.lng.toString()),
+      lat,
+      lng,
       address: result.display_name,
     };
     
@@ -279,21 +293,20 @@ const LocationPicker = ({
       if (pickupMarkerRef.current) {
         map.removeLayer(pickupMarkerRef.current);
       }
-      pickupMarkerRef.current = L.marker([location.lat, location.lng], { icon: createIcon('#22c55e') })
+      pickupMarkerRef.current = L.marker([lat, lng], { icon: createIcon('#22c55e') })
         .addTo(map);
       onPickupChange(location);
     } else {
       if (dropoffMarkerRef.current) {
         map.removeLayer(dropoffMarkerRef.current);
       }
-      dropoffMarkerRef.current = L.marker([location.lat, location.lng], { icon: createIcon('#ef4444') })
+      dropoffMarkerRef.current = L.marker([lat, lng], { icon: createIcon('#ef4444') })
         .addTo(map);
       onDropoffChange(location);
     }
     
-    map.flyTo([location.lat, location.lng], 15, { duration: 1 });
-    setSearchResults([]);
-    setSearchQuery('');
+    // Fly to the selected location
+    map.flyTo([lat, lng], 16, { duration: 1.5 });
   };
 
   const handleGetCurrentLocation = () => {
@@ -366,47 +379,59 @@ const LocationPicker = ({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 overflow-hidden">
       {/* Mode selection */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 w-full">
         <Button
           type="button"
           variant={mode === 'pickup' ? 'default' : 'outline'}
-          onClick={() => setMode('pickup')}
-          className="flex-1"
+          onClick={() => {
+            setMode('pickup');
+            setSearchQuery('');
+            setSearchResults([]);
+          }}
+          className="flex-1 min-w-0 overflow-hidden"
           size="sm"
         >
-          <MapPin className="w-4 h-4 mr-2 text-green-500" />
-          Chiqish nuqtasi
+          <MapPin className="w-4 h-4 mr-1 flex-shrink-0 text-green-500" />
+          <span className="truncate">Chiqish</span>
         </Button>
         <Button
           type="button"
           variant={mode === 'dropoff' ? 'default' : 'outline'}
-          onClick={() => setMode('dropoff')}
-          className="flex-1"
+          onClick={() => {
+            setMode('dropoff');
+            setSearchQuery('');
+            setSearchResults([]);
+          }}
+          className="flex-1 min-w-0 overflow-hidden"
           size="sm"
         >
-          <MapPin className="w-4 h-4 mr-2 text-red-500" />
-          Borish nuqtasi
+          <MapPin className="w-4 h-4 mr-1 flex-shrink-0 text-red-500" />
+          <span className="truncate">Borish</span>
         </Button>
       </div>
 
       {/* Search bar */}
-      <div className="flex gap-2">
-        <div className="flex-1 relative">
+      <div className="flex gap-2 w-full">
+        <div className="flex-1 min-w-0 relative">
           <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Manzilni qidiring..."
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            className="w-full"
           />
           {searchResults.length > 0 && (
-            <div className="absolute z-[1000] w-full mt-1 bg-card border border-border rounded-md shadow-lg max-h-48 overflow-y-auto">
+            <div 
+              className="absolute w-full mt-1 bg-card border border-border rounded-md shadow-lg max-h-48 overflow-y-auto"
+              style={{ zIndex: 9999, pointerEvents: 'auto' }}
+            >
               {searchResults.map((result, index) => (
                 <button
                   key={index}
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b border-border last:border-b-0"
                   onClick={() => handleSelectSearchResult(result)}
                 >
                   {result.display_name}
@@ -415,10 +440,10 @@ const LocationPicker = ({
             </div>
           )}
         </div>
-        <Button type="button" variant="outline" size="icon" onClick={handleSearch} disabled={searching}>
+        <Button type="button" variant="outline" size="icon" onClick={handleSearch} disabled={searching} className="flex-shrink-0">
           {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
         </Button>
-        <Button type="button" variant="outline" size="icon" onClick={handleGetCurrentLocation} disabled={gettingLocation}>
+        <Button type="button" variant="outline" size="icon" onClick={handleGetCurrentLocation} disabled={gettingLocation} className="flex-shrink-0">
           {gettingLocation ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
         </Button>
       </div>

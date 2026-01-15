@@ -21,6 +21,18 @@ const SearchForm = ({ variant = 'hero' }: SearchFormProps) => {
   const [date, setDate] = useState('');
   const [passengers, setPassengers] = useState('1');
 
+  // When 'from' changes, clear 'to' if it's the same
+  const handleFromChange = (value: string) => {
+    setFrom(value);
+    if (to === value) {
+      setTo('');
+    }
+  };
+
+  // Filter destinations to exclude selected origin
+  const filteredDistricts = surxondaryoRegion.districts.filter(d => d.id !== from);
+  const filteredCenters = regionalCenters.filter(c => c.id !== from);
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const params = new URLSearchParams();
@@ -44,7 +56,7 @@ const SearchForm = ({ variant = 'hero' }: SearchFormProps) => {
             </span>
             {t('home.from')}
           </Label>
-          <Select value={from} onValueChange={setFrom}>
+          <Select value={from} onValueChange={handleFromChange}>
             <SelectTrigger id="from" className="h-12 bg-background border-border hover:border-primary/50 transition-colors">
               <SelectValue placeholder={t('common.select')} />
             </SelectTrigger>
@@ -102,7 +114,7 @@ const SearchForm = ({ variant = 'hero' }: SearchFormProps) => {
                   <PickupPinIcon size={16} />
                   Surxondaryo tumanlari
                 </SelectLabel>
-                {surxondaryoRegion.districts.map((district) => (
+                {filteredDistricts.map((district) => (
                   <SelectItem key={district.id} value={district.id}>
                     {district.name[language]}
                   </SelectItem>
@@ -113,7 +125,7 @@ const SearchForm = ({ variant = 'hero' }: SearchFormProps) => {
                   <DropoffPinIcon size={16} />
                   Viloyat markazlari
                 </SelectLabel>
-                {regionalCenters.map((center) => (
+                {filteredCenters.map((center) => (
                   <SelectItem key={center.id} value={center.id}>
                     {center.name[language]}
                   </SelectItem>

@@ -4,21 +4,25 @@
     <meta charset="utf-8">
     <title>TaxiGo - Surxondaryo Taksi Xizmati</title>
     <script type="text/javascript">
-      // Single Page Apps for GitHub Pages
-      // MIT License
-      // https://github.com/rafgraph/spa-github-pages
-      var pathSegmentsToKeep = 1;
-
+      // Universal SPA redirect for any hosting
       var l = window.location;
+      var redirectPath = l.pathname;
+      
+      // Remove trailing slash if exists
+      if (redirectPath.length > 1 && redirectPath.endsWith('/')) {
+        redirectPath = redirectPath.slice(0, -1);
+      }
+      
+      // Redirect to index with path in query string
       l.replace(
         l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
-        l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
-        l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
-        (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+        '/?p=' + encodeURIComponent(redirectPath) +
+        (l.search ? '&q=' + encodeURIComponent(l.search) : '') +
         l.hash
       );
     </script>
   </head>
   <body>
+    <p>Redirecting...</p>
   </body>
 </html>

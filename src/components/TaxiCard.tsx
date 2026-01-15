@@ -58,9 +58,14 @@ const TaxiCard = ({
   const distance = useMemo(() => getDistance(fromId, toId), [fromId, toId]);
   
   const getDistrictName = (districtId: string) => {
-    const location = getLocationById(districtId);
-    if (location) return location.name[language];
-    return districtId;
+    // Handle multiple districts separated by comma
+    const ids = districtId.split(',').filter(Boolean);
+    const names = ids.map(id => {
+      const location = getLocationById(id);
+      if (location) return location.name[language].toUpperCase();
+      return id.toUpperCase();
+    });
+    return names.join(', ');
   };
 
   const formatPrice = (price: number) => {
@@ -74,9 +79,42 @@ const TaxiCard = ({
     return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
   };
 
+  // Check if trip is expired (departure time has passed) - using Uzbekistan timezone (UTC+5)
+  const isExpired = useMemo(() => {
+    try {
+      // Get current time in Uzbekistan (UTC+5)
+      const now = new Date();
+      const uzbekistanOffset = 5 * 60; // UTC+5 in minutes
+      const localOffset = now.getTimezoneOffset();
+      const uzbekistanTime = new Date(now.getTime() + (uzbekistanOffset + localOffset) * 60000);
+      
+      const [hours, minutes] = departureTime.split(':').map(Number);
+      
+      // Parse date - handle both YYYY-MM-DD and DD.MM.YYYY formats
+      let day, month, year;
+      if (departureDate.includes('-')) {
+        [year, month, day] = departureDate.split('-').map(Number);
+      } else {
+        [day, month, year] = departureDate.split('.').map(Number);
+      }
+      
+      const tripDate = new Date(year, month - 1, day, hours, minutes);
+      
+      return uzbekistanTime > tripDate;
+    } catch {
+      return false;
+    }
+  }, [departureTime, departureDate]);
+
   return (
-    <Card className="overflow-hidden card-hover border-border bg-card group">
-      <CardContent className="p-0">
+    <Card className={`overflow-hidden card-hover border-border bg-card group relative ${isExpired ? 'opacity-60' : ''}`}>
+      {/* Expired indicator banner */}
+      {isExpired && (
+        <div className="absolute top-0 left-0 right-0 bg-destructive/90 text-destructive-foreground text-xs font-medium py-1 px-3 text-center z-10">
+          ⏰ {language === 'uz-latin' ? "Vaqti o'tgan" : "Вақти ўтган"}
+        </div>
+      )}
+      <CardContent className={`p-0 ${isExpired ? 'pt-6' : ''}`}>
         {/* Top section with route - MOBILE OPTIMIZED */}
         <div className="p-3 sm:p-4 pb-2 sm:pb-3 border-b border-border/50">
           {/* Route display - vertical on mobile, horizontal on desktop */}
@@ -158,10 +196,11 @@ const TaxiCard = ({
                 </div>
               </div>
               
-              {/* Time */}
+              {/* Time & Date */}
               <div className="flex items-center gap-1 text-foreground">
                 <ClockIcon size={14} className="text-muted-foreground" />
                 <span className="font-medium">{departureTime}</span>
+                <span className="text-muted-foreground text-xs">| {departureDate}</span>
               </div>
 
               {/* Distance - hidden on small mobile */}
