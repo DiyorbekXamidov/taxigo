@@ -137,11 +137,15 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
     
     setLoading(true);
     try {
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      
       // Create booking with location data
       const { data: bookingData, error: bookingError } = await supabase
         .from('bookings')
         .insert({
           trip_id: trip.id,
+          user_id: user?.id || null,
           passenger_name: name.trim(),
           passenger_phone: phone.trim(),
           seats_booked: seats,
@@ -155,7 +159,10 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
         .select('id')
         .single();
 
-      if (bookingError) throw bookingError;
+      if (bookingError) {
+        console.error('Booking error:', bookingError);
+        throw bookingError;
+      }
 
       // Update occupied seats
       const { error: updateError } = await supabase
@@ -163,28 +170,36 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
         .update({ occupied_seats: trip.occupied_seats + seats })
         .eq('id', trip.id);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error('Update error:', updateError);
+        throw updateError;
+      }
 
-      // Send notification to driver via Telegram (including coordinates)
-      await supabase.functions.invoke('send-telegram-notification', {
-        body: {
-          action: 'send_booking_notification',
-          tripId: trip.id,
-          passengerName: name.trim(),
-          passengerPhone: phone.trim(),
-          seatsBooked: seats,
-          fromDistrict: getDistrictName(trip.from_district),
-          toDistrict: getDistrictName(trip.to_district),
-          departureDate: trip.departure_date,
-          departureTime: trip.departure_time,
-          pickupAddress: pickupLocation?.address || null,
-          dropoffAddress: dropoffLocation?.address || null,
-          pickupLat: pickupLocation?.lat || null,
-          pickupLng: pickupLocation?.lng || null,
-          dropoffLat: dropoffLocation?.lat || null,
-          dropoffLng: dropoffLocation?.lng || null,
-        }
-      });
+      // Send notification to driver via Telegram (don't fail booking if this fails)
+      try {
+        await supabase.functions.invoke('send-telegram-notification', {
+          body: {
+            action: 'send_booking_notification',
+            tripId: trip.id,
+            passengerName: name.trim(),
+            passengerPhone: phone.trim(),
+            seatsBooked: seats,
+            fromDistrict: getDistrictName(trip.from_district),
+            toDistrict: getDistrictName(trip.to_district),
+            departureDate: trip.departure_date,
+            departureTime: trip.departure_time,
+            pickupAddress: pickupLocation?.address || null,
+            dropoffAddress: dropoffLocation?.address || null,
+            pickupLat: pickupLocation?.lat || null,
+            pickupLng: pickupLocation?.lng || null,
+            dropoffLat: dropoffLocation?.lat || null,
+            dropoffLng: dropoffLocation?.lng || null,
+          }
+        });
+      } catch (telegramError) {
+        console.warn('Telegram notification failed:', telegramError);
+        // Don't fail the booking if telegram fails
+      }
 
       toast({
         title: texts.success,
@@ -200,6 +215,7 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
       console.error('Error creating booking:', error);
       toast({
         title: texts.error,
+        description: error instanceof Error ? error.message : 'Xatolik yuz berdi',
         variant: 'destructive',
       });
     } finally {
