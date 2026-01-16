@@ -7,15 +7,16 @@ import TelegramConnection from '@/components/TelegramConnection';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
+import { auth, db } from '@/integrations/firebase/client';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { collection, query, where, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
-import { Session } from '@supabase/supabase-js';
 import { 
   Search, 
   Calendar, 
   MapPin, 
   Clock, 
-  User,
+  User as UserIcon,
   Phone,
   Settings,
   Loader2,
@@ -46,55 +47,72 @@ const PassengerDashboard = () => {
   const { language, t } = useLanguage();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState('');
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
         navigate('/auth');
       } else {
-        setSession(session);
-        setUserName(session.user.user_metadata?.name || '');
-        fetchBookings(session.user.id);
+        setUser(firebaseUser);
+        // Get user name from Firestore
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            setUserName(userDoc.data().name || '');
+          }
+        } catch (error) {
+          console.error('Error fetching user:', error);
+        }
+        fetchBookings(firebaseUser.uid);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setSession(session);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, [navigate]);
 
   const fetchBookings = async (userId: string) => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          *,
-          taxi_trips (
-            from_district,
-            to_district,
-            departure_date,
-            departure_time,
-            driver_name,
-            phone,
-            vehicle_model
-          )
-        `)
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setBookings(data || []);
+      const bookingsQuery = query(
+        collection(db, 'bookings'),
+        where('user_id', '==', userId),
+        orderBy('created_at', 'desc')
+      );
+      const querySnapshot = await getDocs(bookingsQuery);
+      const bookingsData: Booking[] = [];
+      
+      for (const docSnap of querySnapshot.docs) {
+        const bookingData = { id: docSnap.id, ...docSnap.data() } as Booking;
+        
+        // Get trip info
+        if (bookingData.trip_id) {
+          try {
+            const tripDoc = await getDoc(doc(db, 'taxi_trips', bookingData.trip_id));
+            if (tripDoc.exists()) {
+              const tripData = tripDoc.data();
+              bookingData.taxi_trips = {
+                from_district: tripData.from_district,
+                to_district: tripData.to_district,
+                departure_date: tripData.departure_date,
+                departure_time: tripData.departure_time,
+                driver_name: tripData.driver_name,
+                phone: tripData.phone,
+                vehicle_model: tripData.vehicle_model,
+              };
+            }
+          } catch {
+            console.error('Error fetching trip');
+          }
+        }
+        
+        bookingsData.push(bookingData);
+      }
+      
+      setBookings(bookingsData);
     } catch (error) {
       console.error('Error fetching bookings:', error);
     } finally {
@@ -114,7 +132,7 @@ const PassengerDashboard = () => {
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
     navigate('/');
   };
 
@@ -214,13 +232,13 @@ const PassengerDashboard = () => {
                               {booking.taxi_trips?.departure_time}
                             </span>
                             <span className="flex items-center gap-1">
-                              <User className="w-4 h-4" />
+                              <UserIcon className="w-4 h-4" />
                               {booking.seats_booked} {language === 'uz-latin' ? "o'rin" : "ўрин"}
                             </span>
                           </div>
                           <div className="flex flex-wrap gap-4 text-sm">
                             <span className="flex items-center gap-1">
-                              <User className="w-4 h-4 text-muted-foreground" />
+                              <UserIcon className="w-4 h-4 text-muted-foreground" />
                               {booking.taxi_trips?.driver_name}
                             </span>
                             <a 
@@ -250,9 +268,9 @@ const PassengerDashboard = () => {
         </Card>
 
         {/* Telegram Notifications */}
-        {session && (
+        {user && (
           <div className="mt-6">
-            <TelegramConnection userId={session.user.id} isPassenger={true} />
+            <TelegramConnection userId={user.uid} isPassenger={true} />
           </div>
         )}
       </main>

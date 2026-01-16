@@ -12,7 +12,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { supabase } from '@/integrations/supabase/client';
+import { auth, db, sendBookingNotification } from '@/integrations/firebase/client';
+import { collection, addDoc, updateDoc, doc, getDoc } from 'firebase/firestore';
 import { surxondaryoRegion } from '@/data/regions';
 import LocationPicker from './LocationPicker';
 import LiveLocationSharing from './LiveLocationSharing';
@@ -56,17 +57,18 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
   const [createdBookingId, setCreatedBookingId] = useState<string | null>(null);
   const [savedName, setSavedName] = useState('');
 
-  // Auto-fill from user session
+  // Pre-fill from user data
   useEffect(() => {
-    if (isOpen) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session) {
-          const metadata = session.user.user_metadata || {};
-          if (metadata.name && !name) {
-            setName(metadata.name);
+    if (isOpen && auth.currentUser) {
+      const uid = auth.currentUser.uid;
+      getDoc(doc(db, 'users', uid)).then((userDoc) => {
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          if (userData.name && !name) {
+            setName(userData.name);
           }
-          if (metadata.phone && !phone) {
-            setPhone(metadata.phone);
+          if (userData.phone && !phone) {
+            setPhone(userData.phone);
           }
         }
       });
@@ -138,77 +140,72 @@ const BookingDialog = ({ isOpen, onClose, trip }: BookingDialogProps) => {
     setLoading(true);
     try {
       // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = auth.currentUser;
       
       // Create booking with location data
-      const { data: bookingData, error: bookingError } = await supabase
-        .from('bookings')
-        .insert({
-          trip_id: trip.id,
-          user_id: user?.id || null,
-          passenger_name: name.trim(),
-          passenger_phone: phone.trim(),
-          seats_booked: seats,
-          pickup_lat: pickupLocation?.lat || null,
-          pickup_lng: pickupLocation?.lng || null,
-          pickup_address: pickupLocation?.address || null,
-          dropoff_lat: dropoffLocation?.lat || null,
-          dropoff_lng: dropoffLocation?.lng || null,
-          dropoff_address: dropoffLocation?.address || null,
-        })
-        .select('id')
-        .single();
+      const bookingData = {
+        trip_id: trip.id,
+        user_id: user?.uid || null,
+        passenger_name: name.trim(),
+        passenger_phone: phone.trim(),
+        seats_booked: seats,
+        status: 'pending',
+        pickup_lat: pickupLocation?.lat || null,
+        pickup_lng: pickupLocation?.lng || null,
+        pickup_address: pickupLocation?.address || null,
+        dropoff_lat: dropoffLocation?.lat || null,
+        dropoff_lng: dropoffLocation?.lng || null,
+        dropoff_address: dropoffLocation?.address || null,
+        created_at: new Date().toISOString(),
+      };
 
-      if (bookingError) {
-        console.error('Booking error:', bookingError);
-        throw bookingError;
-      }
+      const docRef = await addDoc(collection(db, 'bookings'), bookingData);
 
-      // Update occupied seats
-      const { error: updateError } = await supabase
-        .from('taxi_trips')
-        .update({ occupied_seats: trip.occupied_seats + seats })
-        .eq('id', trip.id);
-
-      if (updateError) {
-        console.error('Update error:', updateError);
-        throw updateError;
-      }
-
-      // Send notification to driver via Telegram (don't fail booking if this fails)
-      try {
-        await supabase.functions.invoke('send-telegram-notification', {
-          body: {
-            action: 'send_booking_notification',
-            tripId: trip.id,
-            passengerName: name.trim(),
-            passengerPhone: phone.trim(),
-            seatsBooked: seats,
-            fromDistrict: getDistrictName(trip.from_district),
-            toDistrict: getDistrictName(trip.to_district),
-            departureDate: trip.departure_date,
-            departureTime: trip.departure_time,
-            pickupAddress: pickupLocation?.address || null,
-            dropoffAddress: dropoffLocation?.address || null,
-            pickupLat: pickupLocation?.lat || null,
-            pickupLng: pickupLocation?.lng || null,
-            dropoffLat: dropoffLocation?.lat || null,
-            dropoffLng: dropoffLocation?.lng || null,
-          }
-        });
-      } catch (telegramError) {
-        console.warn('Telegram notification failed:', telegramError);
-        // Don't fail the booking if telegram fails
-      }
+      // Update occupied seats in taxi_trips
+      const tripRef = doc(db, 'taxi_trips', trip.id);
+      await updateDoc(tripRef, { 
+        occupied_seats: trip.occupied_seats + seats 
+      });
 
       toast({
         title: texts.success,
         description: texts.successDesc,
       });
 
+      // Try to send Telegram notification to driver
+      try {
+        // Get trip driver info
+        const tripDoc = await getDoc(tripRef);
+        const tripData = tripDoc.data();
+        
+        if (tripData?.driver_id) {
+          // Get driver's Telegram chat_id
+          const telegramDoc = await getDoc(doc(db, 'driver_telegram', tripData.driver_id));
+          
+          if (telegramDoc.exists()) {
+            const driverChatId = telegramDoc.data().chat_id;
+            
+            // Send notification via Cloud Function
+            await sendBookingNotification({
+              driverChatId,
+              passengerName: name.trim(),
+              passengerPhone: phone.trim(),
+              passengerCount: seats,
+              pickupAddress: pickupLocation?.address || undefined,
+              tripFrom: trip.from_district,
+              tripTo: trip.to_district,
+            });
+            console.log('Telegram notification sent to driver');
+          }
+        }
+      } catch (notifyError) {
+        // Don't fail booking if notification fails
+        console.log('Telegram notification skipped:', notifyError);
+      }
+
       // Show success state with live location sharing option
       setSavedName(name.trim());
-      setCreatedBookingId(bookingData.id);
+      setCreatedBookingId(docRef.id);
       setBookingSuccess(true);
       
     } catch (error) {

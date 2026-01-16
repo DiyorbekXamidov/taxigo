@@ -3,36 +3,39 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Menu, X, User, Globe, LayoutDashboard } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { Session } from '@supabase/supabase-js';
+import { auth, db } from '@/integrations/firebase/client';
+import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { TaxiLogoMark } from '@/components/icons/TaxiIcons';
 
 const Header = () => {
   const { language, setLanguage, t } = useLanguage();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
   const [scrolled, setScrolled] = useState(false);
   const [isDriver, setIsDriver] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        const metadata = session.user.user_metadata || {};
-        setIsDriver(metadata.is_driver === true || metadata.user_type === 'driver');
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      if (firebaseUser) {
+        // Get user data from Firestore
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            setIsDriver(userData.is_driver === true || userData.user_type === 'driver');
+          }
+        } catch (error) {
+          console.error('Error fetching user data:', error);
+        }
+      } else {
+        setIsDriver(false);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        const metadata = session.user.user_metadata || {};
-        setIsDriver(metadata.is_driver === true || metadata.user_type === 'driver');
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -44,7 +47,7 @@ const Header = () => {
   }, []);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
     navigate('/');
   };
 
@@ -84,7 +87,7 @@ const Header = () => {
               >
                 {t('nav.search')}
               </Link>
-              {session && (
+              {user && (
                 <Link 
                   to={isDriver ? '/driver' : '/passenger'} 
                   className="text-foreground hover:text-primary transition-colors font-medium link-underline"
@@ -106,7 +109,7 @@ const Header = () => {
                 {language === 'uz-latin' ? 'Кир' : 'Lat'}
               </Button>
 
-              {session ? (
+              {user ? (
                 <div className="flex items-center gap-2">
                   <Link to={isDriver ? '/driver' : '/passenger'}>
                     <Button variant="outline" size="sm" className="gap-2">
@@ -130,7 +133,7 @@ const Header = () => {
             {/* Mobile menu button */}
             <div className="md:hidden flex items-center gap-2">
               {/* Quick dashboard access on mobile */}
-              {session && (
+              {user && (
                 <Link to={isDriver ? '/driver' : '/passenger'}>
                   <Button size="sm" variant="outline" className="gap-1 px-2">
                     <LayoutDashboard className="w-4 h-4" />
@@ -165,7 +168,7 @@ const Header = () => {
                 >
                   {t('nav.search')}
                 </Link>
-                {session && (
+                {user && (
                   <Link
                     to={isDriver ? '/driver' : '/passenger'}
                     className="text-foreground hover:text-primary hover:bg-muted/50 transition-colors font-medium py-3 px-3 rounded-lg flex items-center gap-2"
@@ -185,7 +188,7 @@ const Header = () => {
                     <Globe className="w-4 h-4" />
                     {language === 'uz-latin' ? 'Кирилл' : 'Lotin'}
                   </Button>
-                  {session ? (
+                  {user ? (
                     <Button variant="ghost" size="sm" onClick={handleLogout}>
                       {t('nav.logout')}
                     </Button>

@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { auth, verifyTelegramLogin } from '@/integrations/firebase/client';
+import { signInWithCustomToken } from 'firebase/auth';
 
 // Telegram icon component
 const TelegramIcon = () => (
@@ -36,33 +37,12 @@ interface TelegramUser {
 }
 
 const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
-  const [botUsername, setBotUsername] = useState<string | null>('taxigosurxonbot');
+  const [botUsername] = useState<string | null>('surxontaksi2_bot');
   const [loading, setLoading] = useState(false);
   const [widgetLoaded, setWidgetLoaded] = useState(false);
   const widgetRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
-
-  // Fetch bot info from Supabase function
-  useEffect(() => {
-    const fetchBotInfo = async () => {
-      try {
-        const { data } = await supabase.functions.invoke('telegram-auth', {
-          body: { action: 'get_bot_info' }
-        });
-
-        if (data?.bot_username) {
-          setBotUsername(data.bot_username);
-        }
-      } catch (error) {
-        console.error('Error fetching bot info:', error);
-        // Use default bot username
-        setBotUsername('taxigosurxonbot');
-      }
-    };
-
-    fetchBotInfo();
-  }, []);
 
   // Handle Telegram auth callback
   const handleTelegramAuth = useCallback(async (user: TelegramUser) => {
@@ -70,34 +50,33 @@ const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
     console.log('Telegram auth data:', user);
 
     try {
-      const { data, error } = await supabase.functions.invoke('telegram-auth', {
-        body: { 
-          action: 'verify_telegram_auth',
-          ...user
-        }
+      // Verify with Cloud Function and get custom token
+      const result = await verifyTelegramLogin({
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        username: user.username,
+        photo_url: user.photo_url,
+        auth_date: user.auth_date,
+        hash: user.hash,
       });
-
-      if (error || !data?.success) {
-        throw new Error(data?.error || 'Authentication failed');
+      
+      const data = result.data as { success: boolean; customToken: string; uid: string };
+      
+      if (!data.success || !data.customToken) {
+        throw new Error('Failed to verify Telegram login');
       }
-
-      // Set the session
-      if (data.session) {
-        await supabase.auth.setSession({
-          access_token: data.session.access_token,
-          refresh_token: data.session.refresh_token,
-        });
-
-        toast({
-          title: "Muvaffaqiyatli!",
-          description: data.isNewUser 
-            ? "Ro'yxatdan muvaffaqiyatli o'tdingiz"
-            : "Tizimga muvaffaqiyatli kirdingiz",
-        });
-
-        navigate('/driver');
-        onSuccess?.();
-      }
+      
+      // Sign in with custom token
+      await signInWithCustomToken(auth, data.customToken);
+      
+      toast({
+        title: "Muvaffaqiyat!",
+        description: "Telegram orqali kirdingiz",
+      });
+      
+      onSuccess?.();
+      navigate('/');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Telegram orqali kirish amalga oshmadi';
       console.error('Telegram auth error:', error);
@@ -109,7 +88,7 @@ const TelegramLoginButton = ({ onSuccess }: TelegramLoginButtonProps) => {
     } finally {
       setLoading(false);
     }
-  }, [navigate, toast, onSuccess]);
+  }, [toast, navigate, onSuccess]);
 
   // Handle URL callback (when returning from Telegram)
   useEffect(() => {

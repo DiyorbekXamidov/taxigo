@@ -9,11 +9,13 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { supabase } from '@/integrations/supabase/client';
+import { auth, db, storage } from '@/integrations/firebase/client';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useToast } from '@/hooks/use-toast';
 import { vehicleModels, vehicleColors } from '@/data/regions';
-import { Camera, Save, ArrowLeft, Loader2, User, Phone, Car } from 'lucide-react';
-import { Session } from '@supabase/supabase-js';
+import { Camera, Save, ArrowLeft, Loader2, User as UserIcon, Phone, Car } from 'lucide-react';
 
 const DriverProfile = () => {
   const { language, t } = useLanguage();
@@ -21,7 +23,7 @@ const DriverProfile = () => {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -37,44 +39,38 @@ const DriverProfile = () => {
   });
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
         navigate('/auth');
       } else {
-        setSession(session);
-        loadProfile(session);
+        setUser(firebaseUser);
+        await loadProfile(firebaseUser.uid);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setSession(session);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, [navigate]);
 
-  const loadProfile = async (session: Session) => {
+  const loadProfile = async (userId: string) => {
     setLoading(true);
     try {
-      const metadata = session.user.user_metadata || {};
-      
-      // Check if user is driver - must be explicitly true or user_type === 'driver'
-      const userIsDriver = metadata.is_driver === true || metadata.user_type === 'driver';
-      setIsDriver(userIsDriver);
-      console.log('User metadata:', metadata, 'isDriver:', userIsDriver);
-      
-      setFormData({
-        name: metadata.name || '',
-        phone: metadata.phone || '',
-        avatar_url: metadata.avatar_url || '',
-        default_vehicle_model: metadata.default_vehicle_model || vehicleModels[0],
-        default_vehicle_color: metadata.default_vehicle_color || 'white',
-        default_plate_number: metadata.default_plate_number || '',
-      });
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        
+        // Check if user is driver
+        const userIsDriver = userData.is_driver === true || userData.user_type === 'driver';
+        setIsDriver(userIsDriver);
+        
+        setFormData({
+          name: userData.name || '',
+          phone: userData.phone || '',
+          avatar_url: userData.avatar_url || '',
+          default_vehicle_model: userData.vehicle_model || vehicleModels[0],
+          default_vehicle_color: userData.vehicle_color || 'white',
+          default_plate_number: userData.plate_number || '',
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -86,7 +82,7 @@ const DriverProfile = () => {
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !session) return;
+    if (!file || !user) return;
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
@@ -111,27 +107,14 @@ const DriverProfile = () => {
     setUploading(true);
     try {
       const fileExt = file.name.split('.').pop();
-      const fileName = `${session.user.id}/avatar.${fileExt}`;
+      const fileName = `avatars/${user.uid}/avatar.${fileExt}`;
 
-      // Delete old avatar if exists
-      await supabase.storage
-        .from('avatars')
-        .remove([fileName]);
-
-      // Upload new avatar
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(fileName, file, { upsert: true });
-
-      if (uploadError) throw uploadError;
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(fileName);
-
-      // Add timestamp to bust cache
-      const avatarUrl = `${publicUrl}?t=${Date.now()}`;
+      // Upload to Firebase Storage
+      const storageRef = ref(storage, fileName);
+      await uploadBytes(storageRef, file);
+      
+      // Get download URL
+      const avatarUrl = await getDownloadURL(storageRef);
       
       setFormData(prev => ({ ...prev, avatar_url: avatarUrl }));
 
@@ -139,11 +122,12 @@ const DriverProfile = () => {
         title: "Muvaffaqiyatli",
         description: "Rasm yuklandi",
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Upload error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Rasm yuklashda xatolik yuz berdi';
       toast({
         title: "Xatolik",
-        description: error.message || "Rasm yuklashda xatolik yuz berdi",
+        description: errorMessage,
         variant: 'destructive',
       });
     } finally {
@@ -153,22 +137,19 @@ const DriverProfile = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session) return;
+    if (!user) return;
 
     setSaving(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: {
-          name: formData.name,
-          phone: formData.phone,
-          avatar_url: formData.avatar_url,
-          default_vehicle_model: formData.default_vehicle_model,
-          default_vehicle_color: formData.default_vehicle_color,
-          default_plate_number: formData.default_plate_number,
-        }
+      // Update user data in Firestore
+      await updateDoc(doc(db, 'users', user.uid), {
+        name: formData.name,
+        phone: formData.phone,
+        avatar_url: formData.avatar_url,
+        vehicle_model: formData.default_vehicle_model,
+        vehicle_color: formData.default_vehicle_color,
+        plate_number: formData.default_plate_number,
       });
-
-      if (error) throw error;
 
       toast({
         title: "Muvaffaqiyatli",
@@ -176,10 +157,11 @@ const DriverProfile = () => {
       });
 
       navigate(isDriver ? '/driver' : '/passenger');
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Xatolik yuz berdi';
       toast({
         title: "Xatolik",
-        description: error.message,
+        description: errorMessage,
         variant: 'destructive',
       });
     } finally {
@@ -241,7 +223,7 @@ const DriverProfile = () => {
                   <Avatar className="w-24 h-24 cursor-pointer" onClick={handleAvatarClick}>
                     <AvatarImage src={formData.avatar_url} alt={formData.name} />
                     <AvatarFallback className="text-2xl bg-primary text-primary-foreground">
-                      {formData.name ? getInitials(formData.name) : <User className="w-8 h-8" />}
+                      {formData.name ? getInitials(formData.name) : <UserIcon className="w-8 h-8" />}
                     </AvatarFallback>
                   </Avatar>
                   <button
@@ -274,7 +256,7 @@ const DriverProfile = () => {
               {/* Personal Info Section */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold flex items-center gap-2">
-                  <User className="w-5 h-5" />
+                  <UserIcon className="w-5 h-5" />
                   {language === 'uz-latin' ? "Shaxsiy ma'lumotlar" : "Шахсий маълумотлар"}
                 </h3>
                 

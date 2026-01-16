@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { MessageCircle, Check, X, ExternalLink } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { db, verifyTelegramConnection } from '@/integrations/firebase/client';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 
 interface TelegramConnectionProps {
@@ -60,15 +61,10 @@ const TelegramConnection = ({ userId, isPassenger = false }: TelegramConnectionP
   const checkConnection = async () => {
     setChecking(true);
     try {
-      const { data, error } = await supabase
-        .from('driver_telegram')
-        .select('chat_id')
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (data) {
+      const telegramDoc = await getDoc(doc(db, 'driver_telegram', userId));
+      if (telegramDoc.exists()) {
         setIsConnected(true);
-        setConnectedChatId(data.chat_id);
+        setConnectedChatId(telegramDoc.data().chat_id);
       }
     } catch (error) {
       console.error('Error checking telegram connection:', error);
@@ -82,33 +78,20 @@ const TelegramConnection = ({ userId, isPassenger = false }: TelegramConnectionP
     
     setLoading(true);
     try {
-      // First verify the chat ID by sending a test message
-      const { data: verifyData, error: verifyError } = await supabase.functions.invoke(
-        'send-telegram-notification',
-        {
-          body: { action: 'verify_chat', chatId: chatId.trim() }
-        }
-      );
-
-      if (verifyError || !verifyData?.success) {
-        toast({
-          title: texts.error,
-          description: texts.invalidChatId,
-          variant: 'destructive',
-        });
-        setLoading(false);
-        return;
+      // Verify connection via Cloud Function (sends test message)
+      const result = await verifyTelegramConnection({ chatId: chatId.trim() });
+      const data = result.data as { success: boolean; verified: boolean };
+      
+      if (!data.success || !data.verified) {
+        throw new Error('Verification failed');
       }
 
-      // Save to database
-      const { error: saveError } = await supabase
-        .from('driver_telegram')
-        .upsert({
-          user_id: userId,
-          chat_id: chatId.trim(),
-        });
-
-      if (saveError) throw saveError;
+      // Save to Firestore after verification
+      await setDoc(doc(db, 'driver_telegram', userId), {
+        user_id: userId,
+        chat_id: chatId.trim(),
+        created_at: new Date().toISOString(),
+      });
 
       setIsConnected(true);
       setConnectedChatId(chatId.trim());
@@ -135,12 +118,7 @@ const TelegramConnection = ({ userId, isPassenger = false }: TelegramConnectionP
   const handleDisconnect = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase
-        .from('driver_telegram')
-        .delete()
-        .eq('user_id', userId);
-
-      if (error) throw error;
+      await deleteDoc(doc(db, 'driver_telegram', userId));
 
       setIsConnected(false);
       setConnectedChatId(null);

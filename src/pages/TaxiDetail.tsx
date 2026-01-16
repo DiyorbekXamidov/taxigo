@@ -13,7 +13,8 @@ import {
   Snowflake, Cigarette, Music, Briefcase, ArrowRight,
   User, Car as CarIcon, Map, Calendar
 } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { db } from '@/integrations/firebase/client';
+import { doc, getDoc } from 'firebase/firestore';
 import { surxondaryoRegion, vehicleColors } from '@/data/regions';
 
 interface TaxiTrip {
@@ -55,16 +56,11 @@ const TaxiDetail = () => {
     
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('taxi_trips')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) {
-        console.error('Error fetching trip:', error);
+      const tripDoc = await getDoc(doc(db, 'taxi_trips', id));
+      if (tripDoc.exists()) {
+        setTrip({ id: tripDoc.id, ...tripDoc.data() } as TaxiTrip);
       } else {
-        setTrip(data);
+        console.error('Trip not found');
       }
     } catch (error) {
       console.error('Error:', error);

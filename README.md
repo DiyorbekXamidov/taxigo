@@ -51,4 +51,4 @@ Bot quyidagi funksiyalarni qo'llab-quvvatlaydi:
 
 ## Litsenziya
 
-© 2024 TaxiGo. Barcha huquqlar himoyalangan.
+© 2026 TaxiGo. Barcha huquqlar himoyalangan.

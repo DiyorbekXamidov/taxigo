@@ -12,12 +12,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
+import { auth, db } from '@/integrations/firebase/client';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { collection, query, where, orderBy, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useMobileKeyboardScroll } from '@/hooks/useMobileKeyboardScroll';
 import { surxondaryoRegion, regionalCenters, vehicleModels, vehicleColors } from '@/data/regions';
 import { Plus, Edit2, Trash2, Pause, Play, Car, ArrowRight, Clock, Users, Settings, CalendarCheck } from 'lucide-react';
-import { Session } from '@supabase/supabase-js';
+
 
 interface TaxiTrip {
   id: string;
@@ -44,7 +46,7 @@ const DriverDashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   useMobileKeyboardScroll(); // Auto-scroll inputs into view on mobile
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [trips, setTrips] = useState<TaxiTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -71,51 +73,53 @@ const DriverDashboard = () => {
   });
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
         navigate('/auth');
       } else {
-        setSession(session);
-        const metadata = session.user.user_metadata || {};
-        setDriverName(metadata.name || '');
-        setDriverPhone(metadata.phone || '');
-        
-        // Auto-fill vehicle info from profile settings
-        if (metadata.default_vehicle_model || metadata.default_vehicle_color || metadata.default_plate_number) {
-          setFormData(prev => ({
-            ...prev,
-            vehicle_model: metadata.default_vehicle_model || prev.vehicle_model,
-            vehicle_color: metadata.default_vehicle_color || prev.vehicle_color,
-            plate_number: metadata.default_plate_number || prev.plate_number,
-          }));
+        setUser(firebaseUser);
+        // Get user data from Firestore
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            setDriverName(userData.name || '');
+            setDriverPhone(userData.phone || '');
+            
+            // Auto-fill vehicle info from profile settings
+            if (userData.vehicle_model || userData.vehicle_color || userData.plate_number) {
+              setFormData(prev => ({
+                ...prev,
+                vehicle_model: userData.vehicle_model || prev.vehicle_model,
+                vehicle_color: userData.vehicle_color || prev.vehicle_color,
+                plate_number: userData.plate_number || prev.plate_number,
+              }));
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching user data:', error);
         }
-        
-        fetchTrips(session.user.id);
+        fetchTrips(firebaseUser.uid);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setSession(session);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, [navigate]);
 
   const fetchTrips = async (userId: string) => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('taxi_trips')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setTrips(data || []);
+      const tripsQuery = query(
+        collection(db, 'taxi_trips'),
+        where('user_id', '==', userId),
+        orderBy('created_at', 'desc')
+      );
+      const querySnapshot = await getDocs(tripsQuery);
+      const tripsData: TaxiTrip[] = [];
+      querySnapshot.forEach((doc) => {
+        tripsData.push({ id: doc.id, ...doc.data() } as TaxiTrip);
+      });
+      setTrips(tripsData);
     } catch (error) {
       console.error('Error fetching trips:', error);
     } finally {
@@ -125,80 +129,23 @@ const DriverDashboard = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session) return;
+    if (!user) return;
 
     try {
       const tripData = {
         ...formData,
-        user_id: session.user.id,
+        user_id: user.uid,
         driver_name: driverName,
         phone: driverPhone,
         is_active: true,
         rating: 0,
         review_count: 0,
+        created_at: new Date().toISOString(),
       };
 
       if (editingTrip) {
-        // Track what changed for notification
-        const changes: { field: string; old_value: string; new_value: string }[] = [];
-        if (editingTrip.departure_time !== formData.departure_time) {
-          changes.push({ field: 'departure_time', old_value: editingTrip.departure_time, new_value: formData.departure_time });
-        }
-        if (editingTrip.departure_date !== formData.departure_date) {
-          changes.push({ field: 'departure_date', old_value: editingTrip.departure_date, new_value: formData.departure_date });
-        }
-        if (editingTrip.from_district !== formData.from_district) {
-          changes.push({ field: 'from_district', old_value: editingTrip.from_district, new_value: formData.from_district });
-        }
-        if (editingTrip.to_district !== formData.to_district) {
-          changes.push({ field: 'to_district', old_value: editingTrip.to_district, new_value: formData.to_district });
-        }
-        if (editingTrip.price_per_seat !== formData.price_per_seat) {
-          changes.push({ field: 'price_per_seat', old_value: String(editingTrip.price_per_seat), new_value: String(formData.price_per_seat) });
-        }
-
-        const { error } = await supabase
-          .from('taxi_trips')
-          .update(tripData)
-          .eq('id', editingTrip.id);
-
-        if (error) throw error;
-
-        // Notify booked passengers about changes
-        if (changes.length > 0) {
-          try {
-            // Get bookings for this trip
-            const { data: bookings } = await supabase
-              .from('bookings')
-              .select('passenger_name, passenger_telegram_chat_id')
-              .eq('trip_id', editingTrip.id)
-              .eq('status', 'confirmed');
-
-            if (bookings && bookings.length > 0) {
-              const passengers = bookings.map(b => ({
-                name: b.passenger_name,
-                telegram_chat_id: b.passenger_telegram_chat_id
-              }));
-
-              await supabase.functions.invoke('notify-passengers', {
-                body: {
-                  action: 'trip_updated',
-                  trip: {
-                    from_district: formData.from_district,
-                    to_district: formData.to_district,
-                    departure_date: formData.departure_date,
-                    departure_time: formData.departure_time,
-                    driver_name: driverName
-                  },
-                  passengers,
-                  changes
-                }
-              });
-            }
-          } catch (notifyError) {
-            console.error('Failed to notify passengers:', notifyError);
-          }
-        }
+        // Update existing trip
+        await updateDoc(doc(db, 'taxi_trips', editingTrip.id), tripData);
 
         toast({
           title: t('common.success'),
@@ -207,11 +154,9 @@ const DriverDashboard = () => {
             : "Саёҳат янгиланди",
         });
       } else {
-        const { error } = await supabase
-          .from('taxi_trips')
-          .insert([tripData]);
-
-        if (error) throw error;
+        // Add new trip
+        await addDoc(collection(db, 'taxi_trips'), tripData);
+        
         toast({
           title: t('common.success'),
           description: t('home.title') === 'Ishonchli taksi xizmati' 
@@ -223,11 +168,12 @@ const DriverDashboard = () => {
       setIsDialogOpen(false);
       setEditingTrip(null);
       resetForm();
-      fetchTrips(session.user.id);
-    } catch (error: any) {
+      fetchTrips(user.uid);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Xatolik yuz berdi';
       toast({
         title: t('common.error'),
-        description: error.message,
+        description: errorMessage,
         variant: 'destructive',
       });
     }
@@ -235,17 +181,15 @@ const DriverDashboard = () => {
 
   const handleToggleActive = async (trip: TaxiTrip) => {
     try {
-      const { error } = await supabase
-        .from('taxi_trips')
-        .update({ is_active: !trip.is_active })
-        .eq('id', trip.id);
-
-      if (error) throw error;
-      if (session) fetchTrips(session.user.id);
-    } catch (error: any) {
+      await updateDoc(doc(db, 'taxi_trips', trip.id), { 
+        is_active: !trip.is_active 
+      });
+      if (user) fetchTrips(user.uid);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Xatolik yuz berdi';
       toast({
         title: t('common.error'),
-        description: error.message,
+        description: errorMessage,
         variant: 'destructive',
       });
     }
@@ -253,23 +197,20 @@ const DriverDashboard = () => {
 
   const handleDelete = async (tripId: string) => {
     try {
-      const { error } = await supabase
-        .from('taxi_trips')
-        .delete()
-        .eq('id', tripId);
-
-      if (error) throw error;
+      await deleteDoc(doc(db, 'taxi_trips', tripId));
+      
       toast({
         title: t('common.success'),
         description: t('home.title') === 'Ishonchli taksi xizmati' 
           ? "Sayohat o'chirildi" 
           : "Саёҳат ўчирилди",
       });
-      if (session) fetchTrips(session.user.id);
-    } catch (error: any) {
+      if (user) fetchTrips(user.uid);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Xatolik yuz berdi';
       toast({
         title: t('common.error'),
-        description: error.message,
+        description: errorMessage,
         variant: 'destructive',
       });
     }
@@ -339,9 +280,9 @@ const DriverDashboard = () => {
 
       <main className="flex-1 container mx-auto px-4 py-6">
         {/* Telegram Connection */}
-        {session && (
+        {user && (
           <div className="mb-6">
-            <TelegramConnection userId={session.user.id} />
+            <TelegramConnection userId={user.uid} />
           </div>
         )}
 

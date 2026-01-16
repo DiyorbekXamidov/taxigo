@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { MapPin, Navigation, Loader2, Radio, ExternalLink, RefreshCw, Bell, BellOff } from 'lucide-react';
 import { toast } from 'sonner';
+import { rtdb } from '@/integrations/firebase/client';
+import { ref, onValue, off } from 'firebase/database';
 import 'leaflet/dist/leaflet.css';
 
 interface LiveLocationViewerProps {
@@ -74,30 +75,19 @@ const LiveLocationViewer = ({
     { distance: 200, message: "🚗 Haydovchi yetib keldi! Chiqishga tayyorlaning.", key: '200m' },
   ];
 
-  // Send proximity notification to passenger
+  // Send proximity notification to passenger (disabled - needs Firebase Cloud Functions)
   const sendProximityNotification = useCallback(async (message: string, key: string) => {
     if (notificationsSent.has(key)) return;
     
     try {
-      const { data, error } = await supabase.functions.invoke('send-telegram-notification', {
-        body: {
-          action: 'send_proximity_notification',
-          passengerTelegramChatId,
-          passengerPhone,
-          passengerName,
-          message,
-          distanceKey: key,
-        },
-      });
-
-      if (!error && data?.success) {
-        setNotificationsSent(prev => new Set([...prev, key]));
-        toast.success(`Yo'lovchiga xabar yuborildi: ${key}`);
-      }
+      // TODO: Implement with Firebase Cloud Functions
+      console.log('Proximity notification (disabled):', message, key);
+      setNotificationsSent(prev => new Set([...prev, key]));
+      toast.success(`Yo'lovchiga xabar: ${key}`);
     } catch (err) {
       console.error('Failed to send proximity notification:', err);
     }
-  }, [passengerTelegramChatId, passengerPhone, passengerName, notificationsSent]);
+  }, [notificationsSent]);
 
   // Check proximity and send notifications
   useEffect(() => {
@@ -267,23 +257,31 @@ const LiveLocationViewer = ({
     };
   }, [pickupLat, pickupLng, pickupAddress]);
 
-  // Subscribe to live location updates
+  // Subscribe to live location updates from Firebase Realtime Database
   useEffect(() => {
-    const channel = supabase.channel(`live-location-${bookingId}`, {
-      config: {
-        broadcast: { self: false },
-      },
-    });
+    const locationRef = ref(rtdb, `live-locations/${bookingId}`);
     
-    channelRef.current = channel;
+    console.log('Subscribing to live location for booking:', bookingId);
     
-    channel
-      .on('broadcast', { event: 'location_update' }, async ({ payload }) => {
-        console.log('Received location update:', payload);
-        const locationData = payload as LocationData;
+    const unsubscribe = onValue(locationRef, async (snapshot) => {
+      const data = snapshot.val();
+      
+      if (data && data.isSharing) {
+        // Location data received
+        const locationData: LocationData = {
+          lat: data.lat,
+          lng: data.lng,
+          accuracy: data.accuracy,
+          heading: data.heading,
+          speed: data.speed,
+          timestamp: data.timestamp,
+          passengerName: data.passengerName,
+        };
+        
         setLiveLocation(locationData);
         setLastUpdate(new Date());
         setIsStopped(false);
+        setIsConnected(true);
         
         // Update live marker on map
         if (leafletMapRef.current) {
@@ -333,21 +331,26 @@ const LiveLocationViewer = ({
           // Smooth pan to new location
           map.panTo([locationData.lat, locationData.lng], { animate: true, duration: 0.5 });
         }
-      })
-      .on('broadcast', { event: 'location_stopped' }, ({ payload }) => {
-        console.log('Location sharing stopped:', payload);
-        setIsStopped(true);
-      })
-      .subscribe((status) => {
-        console.log('Channel status:', status);
-        setIsConnected(status === 'SUBSCRIBED');
-      });
+      } else {
+        // Location sharing stopped or no data
+        if (liveLocation) {
+          setIsStopped(true);
+          console.log('Location sharing stopped by passenger');
+        }
+      }
+    }, (error) => {
+      console.error('Error subscribing to location:', error);
+      setIsConnected(false);
+    });
+    
+    // Mark as connected
+    setIsConnected(true);
     
     return () => {
-      supabase.removeChannel(channel);
+      off(locationRef);
       stopTrackingDriver();
     };
-  }, [bookingId, stopTrackingDriver]);
+  }, [bookingId, stopTrackingDriver, liveLocation]);
 
   const openNavigationToLive = () => {
     if (liveLocation) {

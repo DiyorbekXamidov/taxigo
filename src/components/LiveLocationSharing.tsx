@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { MapPin, Navigation, Loader2, Radio, X, ExternalLink } from 'lucide-react';
+import { rtdb } from '@/integrations/firebase/client';
+import { ref, set, remove, onDisconnect } from 'firebase/database';
 import 'leaflet/dist/leaflet.css';
 
 interface LiveLocationSharingProps {
@@ -16,7 +17,6 @@ const LiveLocationSharing = ({ bookingId, passengerName, onClose }: LiveLocation
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [watchId, setWatchId] = useState<number | null>(null);
-  const channelRef = useRef<any>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
@@ -118,41 +118,36 @@ const LiveLocationSharing = ({ bookingId, passengerName, onClose }: LiveLocation
     setError(null);
     setIsSharing(true);
 
-    // Create realtime channel for this booking
-    const channel = supabase.channel(`live-location-${bookingId}`, {
-      config: {
-        broadcast: { self: true },
-      },
-    });
-    
-    channelRef.current = channel;
-    
-    await channel.subscribe();
+    // Reference to this booking's live location in Firebase RTDB
+    const locationRef = ref(rtdb, `live-locations/${bookingId}`);
+
+    // Set up onDisconnect to clean up when user loses connection
+    onDisconnect(locationRef).remove();
 
     // Start watching location
     const id = navigator.geolocation.watchPosition(
-      (position) => {
+      async (position) => {
         const { latitude, longitude, accuracy, heading, speed } = position.coords;
         const locationData = {
           lat: latitude,
           lng: longitude,
-          accuracy,
-          heading,
-          speed,
+          accuracy: accuracy || null,
+          heading: heading || null,
+          speed: speed || null,
           timestamp: Date.now(),
           passengerName,
+          isSharing: true,
         };
         
         setCurrentLocation({ lat: latitude, lng: longitude });
         
-        // Broadcast location to channel
-        channel.send({
-          type: 'broadcast',
-          event: 'location_update',
-          payload: locationData,
-        });
-        
-        console.log('Location broadcasted:', locationData);
+        // Broadcast to Firebase Realtime Database
+        try {
+          await set(locationRef, locationData);
+          console.log('Location broadcasted:', locationData);
+        } catch (err) {
+          console.error('Failed to broadcast location:', err);
+        }
       },
       (err) => {
         console.error('Geolocation error:', err);
@@ -169,27 +164,24 @@ const LiveLocationSharing = ({ bookingId, passengerName, onClose }: LiveLocation
     setWatchId(id);
   }, [bookingId, passengerName]);
 
-  const stopSharing = useCallback(() => {
+  const stopSharing = useCallback(async () => {
     if (watchId !== null) {
       navigator.geolocation.clearWatch(watchId);
       setWatchId(null);
     }
     
-    if (channelRef.current) {
-      // Send final "stopped" message
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'location_stopped',
-        payload: { passengerName, timestamp: Date.now() },
-      });
-      
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+    // Remove location from Firebase Realtime Database
+    try {
+      const locationRef = ref(rtdb, `live-locations/${bookingId}`);
+      await remove(locationRef);
+      console.log('Location sharing stopped and removed from database');
+    } catch (err) {
+      console.error('Failed to remove location from database:', err);
     }
     
     setIsSharing(false);
     setCurrentLocation(null);
-  }, [watchId, passengerName]);
+  }, [watchId, bookingId]);
 
   // Cleanup on unmount
   useEffect(() => {

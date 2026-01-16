@@ -8,10 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { supabase } from '@/integrations/supabase/client';
+import { auth, db } from '@/integrations/firebase/client';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { collection, query, where, getDocs, updateDoc, doc, getDoc, orderBy } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, User, Phone, Users, MapPin, Check, X, Clock, Loader2, Radio } from 'lucide-react';
-import { Session } from '@supabase/supabase-js';
+import { ArrowLeft, User as UserIcon, Phone, Users, MapPin, Check, X, Clock, Loader2, Radio } from 'lucide-react';
 import BookingLocationMap from '@/components/BookingLocationMap';
 import LiveLocationViewer from '@/components/LiveLocationViewer';
 
@@ -42,7 +43,7 @@ const DriverBookings = () => {
   const { language } = useLanguage();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
@@ -64,46 +65,62 @@ const DriverBookings = () => {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
         navigate('/auth');
       } else {
-        setSession(session);
-        fetchBookings(session.user.id);
+        setUser(firebaseUser);
+        await fetchBookings(firebaseUser.uid);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setSession(session);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, [navigate]);
 
   const fetchBookings = async (userId: string) => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          *,
-          taxi_trips!inner (
-            from_district,
-            to_district,
-            departure_date,
-            departure_time,
-            user_id
-          )
-        `)
-        .eq('taxi_trips.user_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setBookings((data as Booking[]) || []);
+      // Get user's trips first
+      const tripsQuery = query(collection(db, 'taxi_trips'), where('user_id', '==', userId));
+      const tripsSnapshot = await getDocs(tripsQuery);
+      const tripIds = tripsSnapshot.docs.map(d => d.id);
+      
+      if (tripIds.length === 0) {
+        setBookings([]);
+        setLoading(false);
+        return;
+      }
+      
+      // Get bookings for these trips
+      const allBookings: Booking[] = [];
+      for (const tripId of tripIds) {
+        const bookingsQuery = query(
+          collection(db, 'bookings'),
+          where('trip_id', '==', tripId),
+          orderBy('created_at', 'desc')
+        );
+        const bookingsSnapshot = await getDocs(bookingsQuery);
+        
+        // Get trip info
+        const tripDoc = await getDoc(doc(db, 'taxi_trips', tripId));
+        const tripData = tripDoc.exists() ? tripDoc.data() : {};
+        
+        bookingsSnapshot.forEach((bookingDoc) => {
+          const bookingData = bookingDoc.data();
+          allBookings.push({
+            id: bookingDoc.id,
+            ...bookingData,
+            taxi_trips: {
+              from_district: tripData.from_district || '',
+              to_district: tripData.to_district || '',
+              departure_date: tripData.departure_date || '',
+              departure_time: tripData.departure_time || '',
+            }
+          } as Booking);
+        });
+      }
+      
+      setBookings(allBookings);
     } catch (error) {
       console.error('Error fetching bookings:', error);
     } finally {
@@ -114,12 +131,7 @@ const DriverBookings = () => {
   const updateBookingStatus = async (bookingId: string, status: string) => {
     setUpdating(bookingId);
     try {
-      const { error } = await supabase
-        .from('bookings')
-        .update({ status })
-        .eq('id', bookingId);
-
-      if (error) throw error;
+      await updateDoc(doc(db, 'bookings', bookingId), { status });
 
       setBookings(prev => 
         prev.map(b => b.id === bookingId ? { ...b, status } : b)
@@ -131,10 +143,11 @@ const DriverBookings = () => {
           ? (language === 'uz-latin' ? "Band qilish tasdiqlandi" : "Банд қилиш тасдиқланди")
           : (language === 'uz-latin' ? "Band qilish bekor qilindi" : "Банд қилиш бекор қилинди"),
       });
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Xatolik yuz berdi';
       toast({
         title: language === 'uz-latin' ? "Xatolik" : "Хатолик",
-        description: error.message,
+        description: errorMessage,
         variant: 'destructive',
       });
     } finally {
@@ -222,7 +235,7 @@ const DriverBookings = () => {
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div className="flex-1 min-w-[200px]">
                             <div className="flex items-center gap-2 mb-2">
-                              <User className="w-4 h-4 text-muted-foreground" />
+                              <UserIcon className="w-4 h-4 text-muted-foreground" />
                               <span className="font-medium text-foreground">{booking.passenger_name}</span>
                               {getStatusBadge(booking.status)}
                             </div>

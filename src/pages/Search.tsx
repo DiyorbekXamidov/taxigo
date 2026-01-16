@@ -10,7 +10,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Filter, SlidersHorizontal } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { db } from '@/integrations/firebase/client';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { TaxiCarIcon, AirConditionerIcon, WomenOnlyIcon, SeatIcon, ClockIcon, PriceTagIcon } from '@/components/icons/TaxiIcons';
 
 interface TaxiTrip {
@@ -54,45 +55,36 @@ const Search = () => {
   const fetchTrips = async () => {
     setLoading(true);
     try {
-      // Fetch direct trips
-      let directQuery = supabase
-        .from('taxi_trips')
-        .select('*')
-        .eq('is_active', true);
-
-      if (from) {
-        directQuery = directQuery.eq('from_district', from);
-      }
-      if (to) {
-        directQuery = directQuery.eq('to_district', to);
-      }
-
-      const { data: directTrips, error: directError } = await directQuery;
-
-      // Also fetch trips where 'from' is in pickup_districts
-      let pickupTrips: TaxiTrip[] = [];
-      if (from && to) {
-        const { data: pickupData } = await supabase
-          .from('taxi_trips')
-          .select('*')
-          .eq('is_active', true)
-          .eq('to_district', to)
-          .contains('pickup_districts', [from]);
+      // Build Firestore query
+      const tripsRef = collection(db, 'taxi_trips');
+      let q = query(tripsRef, where('is_active', '==', true));
+      
+      // Firestore doesn't support multiple inequality filters easily
+      // so we filter in code
+      const querySnapshot = await getDocs(q);
+      const allTrips: TaxiTrip[] = [];
+      
+      querySnapshot.forEach((doc) => {
+        const trip = { id: doc.id, ...doc.data() } as TaxiTrip;
         
-        pickupTrips = (pickupData || []) as TaxiTrip[];
-      }
-
-      if (directError) {
-        console.error('Error fetching trips:', directError);
-        setTrips([]);
-      } else {
-        // Combine and deduplicate trips
-        const allTripsMap = new Map<string, TaxiTrip>();
-        [...(directTrips || []), ...pickupTrips].forEach(trip => {
-          allTripsMap.set(trip.id, trip as TaxiTrip);
-        });
-        setTrips(Array.from(allTripsMap.values()));
-      }
+        // Filter by from/to if specified
+        let matches = true;
+        if (from && trip.from_district !== from) {
+          // Also check if from is in pickup_districts
+          if (!trip.pickup_districts || !trip.pickup_districts.includes(from)) {
+            matches = false;
+          }
+        }
+        if (to && trip.to_district !== to) {
+          matches = false;
+        }
+        
+        if (matches) {
+          allTrips.push(trip);
+        }
+      });
+      
+      setTrips(allTrips);
     } catch (error) {
       console.error('Error:', error);
       setTrips([]);
